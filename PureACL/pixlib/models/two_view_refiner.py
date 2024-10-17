@@ -7,6 +7,7 @@ from torch.nn import functional as nnF
 import logging
 from copy import deepcopy
 import omegaconf
+import itertools
 
 from PureACL.pixlib.models.base_model import BaseModel
 from PureACL.pixlib.models import get_model
@@ -39,7 +40,7 @@ class TwoViewRefiner(BaseModel):
         'clamp_error': 50,
         'normalize_features': True,
         'normalize_dt': True,
-
+        'debug': False,
         # deprecated entries
         'init_target_offset': None,
 
@@ -125,6 +126,7 @@ class TwoViewRefiner(BaseModel):
 
         pred['T_q2r_init'] = []
         pred['T_q2r_opt'] = []
+        pred['T_q2r_opt_list'] = []
         pred['pose_loss'] = []
         for i in reversed(range(len(self.extractor.scales))):
             F_ref = pred['ref']['feature_maps'][i]
@@ -184,12 +186,14 @@ class TwoViewRefiner(BaseModel):
                 F_q = nnF.normalize(F_q, dim=2)  # B x N x C
                 F_ref = nnF.normalize(F_ref, dim=1)  # B x C x W x H
 
-            T_opt, failed = opt(dict(
+            T_opt, failed, T_opt_list = opt(dict(
                 p3D=p3D_query, F_ref=F_ref, F_q=F_q, T_init=T_init, camera=cam_ref,
                 mask=mask, W_ref_q=W_ref_q))
 
             pred['T_q2r_init'].append(T_init)
             pred['T_q2r_opt'].append(T_opt)
+            pred['T_q2r_opt_list'].append(T_opt_list)
+
             T_init = T_opt.detach()
 
             # add by shan, query & reprojection GT error, for query unet back propogate
@@ -262,13 +266,36 @@ class TwoViewRefiner(BaseModel):
 
         return losses
 
+    # def metrics(self, pred, data):
+    #     T_r2q_gt = data['T_q2r_gt'].inv()
+    #
+    #     @torch.no_grad()
+    #     def scaled_pose_error(T_q2r):
+    #         err_R, err_t = (T_r2q_gt@T_q2r).magnitude()
+    #         err_lat, err_long = (T_r2q_gt@T_q2r).magnitude_latlong()
+    #         return err_R, err_t, err_lat, err_long
+    #
+    #     metrics = {}
+    #     for i, T_opt in enumerate(pred['T_q2r_opt']):
+    #         err = scaled_pose_error(T_opt)
+    #         metrics[f'R_error/{i}'], metrics[f't_error/{i}'], metrics[f'lat_error/{i}'], metrics[f'long_error/{i}'] = err
+    #     metrics['R_error'], metrics['t_error'], metrics['lat_error'], metrics[f'long_error']  = err
+    #
+    #     err_init = scaled_pose_error(pred['T_q2r_init'][0])
+    #     metrics['R_error/init'], metrics['t_error/init'], metrics['lat_error/init'], metrics[f'long_error/init'] = err_init
+    #
+    #     return metrics
+
+
     def metrics(self, pred, data):
         T_r2q_gt = data['T_q2r_gt'].inv()
 
         @torch.no_grad()
         def scaled_pose_error(T_q2r):
-            err_R, err_t = (T_r2q_gt@T_q2r).magnitude()
-            err_lat, err_long = (T_r2q_gt@T_q2r).magnitude_latlong()
+            # err_R, err_t = (T_r2q_gt@T_q2r).magnitude()
+            # err_lat, err_long = (T_r2q_gt@T_q2r).magnitude_latlong()
+            err_R, err_t = (T_q2r @ T_r2q_gt).magnitude()
+            err_lat, err_long = (T_q2r @ T_r2q_gt).magnitude_latlong()
             return err_R, err_t, err_lat, err_long
 
         metrics = {}
@@ -279,5 +306,46 @@ class TwoViewRefiner(BaseModel):
 
         err_init = scaled_pose_error(pred['T_q2r_init'][0])
         metrics['R_error/init'], metrics['t_error/init'], metrics['lat_error/init'], metrics[f'long_error/init'] = err_init
+
+        return metrics
+
+
+    def metrics_analysis(self, pred, data):
+        T_r2q_gt = data['T_q2r_gt'].inv()
+
+        @torch.no_grad()
+        def scaled_pose_error(T_q2r):
+            # err_R, err_t = (T_r2q_gt@T_q2r).magnitude()
+            # err_lat, err_long = (T_r2q_gt@T_q2r).magnitude_latlong()
+            err_R, err_t = (T_q2r @ T_r2q_gt).magnitude()
+            err_lat, err_long = (T_q2r @ T_r2q_gt).magnitude_latlong()
+            return err_R, err_t, err_lat, err_long
+
+        metrics = {}
+        # error init
+        err_init = scaled_pose_error(pred['T_q2r_init'][0])
+        metrics['R_error/init'], metrics['t_error/init'], metrics['lat_error/init'], metrics[
+            f'long_error/init'] = err_init
+
+        # error pred
+        pred['T_q2r_opt_list'] = list(itertools.chain(*pred['T_q2r_opt_list']))
+        R_error, t_error, lat_error, long_error = (torch.tensor([]).to(pred['T_q2r_init'][0].device),
+                                                  torch.tensor([]).to(pred['T_q2r_init'][0].device),
+                                                  torch.tensor([]).to(pred['T_q2r_init'][0].device),
+                                                  torch.tensor([]).to(pred['T_q2r_init'][0].device))
+
+
+        for j, T_opt in enumerate(pred['T_q2r_opt_list']):
+            err = scaled_pose_error(T_opt)
+            # R_error, t_error, lat_error, lon_error = err
+            R_error = torch.cat([R_error, err[0]])
+            t_error = torch.cat([t_error, err[1]])
+            lat_error = torch.cat([lat_error, err[2]])
+            long_error = torch.cat([long_error, err[3]])
+
+        metrics['R_error'] = R_error
+        metrics['t_error'] = t_error
+        metrics['lat_error'] = lat_error
+        metrics['long_error'] = long_error
 
         return metrics

@@ -81,7 +81,7 @@ def homography_trans(image, I_tar, I_src, E, N, height):
 
 class Kitti(BaseDataset):
     default_conf = {
-        'dataset_dir': '/data/dataset/Kitti', #"/home/shan/data/Kitti", #
+        'dataset_dir': '/ws/data/kitti-vo', #"/home/shan/data/Kitti", #
         'mul_query': False,
     }
 

@@ -55,14 +55,17 @@ def delete_old_checkpoints(dir_, num_keep):
             kept += 1
 
 
-def load_experiment(exper, conf={}, get_last=False):
+def load_experiment(exper, conf={}, get_last=False, ckpt=None):
     """Load and return the model of a given experiment."""
-    if get_last:
-        ckpt = get_last_checkpoint(exper)
+    if ckpt == None:
+        if get_last:
+            ckpt = get_last_checkpoint(exper)
+        else:
+            ckpt = get_best_checkpoint(exper)
+            logger.info(f'Loading checkpoint {ckpt.name}')
     else:
-        ckpt = get_best_checkpoint(exper)
-    logger.info(f'Loading checkpoint {ckpt.name}')
-    ckpt = torch.load(str(ckpt), map_location='cpu')
+        ckpt = torch.load(str(ckpt), map_location='cpu')
+
 
     loaded_conf = OmegaConf.create(ckpt['conf'])
     OmegaConf.set_struct(loaded_conf, False)
