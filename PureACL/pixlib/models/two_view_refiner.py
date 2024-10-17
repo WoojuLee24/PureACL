@@ -35,12 +35,13 @@ class TwoViewRefiner(BaseModel):
         'optimizer': {
             'name': 'learned_optimizer', #'basic_optimizer',
         },
-        'duplicate_optimizer_per_scale': True,
+        'duplicate_optimizer_per_scale': False,
         'success_thresh': 3,
         'clamp_error': 50,
         'normalize_features': True,
         'normalize_dt': True,
         'debug': False,
+        'topk': 256,
         # deprecated entries
         'init_target_offset': None,
 
@@ -110,7 +111,7 @@ class TwoViewRefiner(BaseModel):
         for q in query_list:
             # find 2d key points from grd confidence map
             grd_key_confidence = merge_confidence_map(pred[q]['confidences'],confidence_count) #[B,H,W]
-            p2d_grd_key = extract_keypoints(grd_key_confidence, start_ratio = data[q]['camera'].c[0,1]/data[q]['camera'].size[0,1]+0.05) #data['grd_ratio'][0])
+            p2d_grd_key = extract_keypoints(grd_key_confidence, topk=self.conf.topk, start_ratio = data[q]['camera'].c[0,1]/data[q]['camera'].size[0,1]+0.05) #data['grd_ratio'][0])
 
             # turn grd key points from 2d to 3d, assume points are on ground
             p2d_c_key = data[q]['camera'].image2world(p2d_grd_key) # 2D->3D scale unknown

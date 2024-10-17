@@ -474,7 +474,8 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
             logger.info(
                 f'Will fine-tune from weights of {conf.train.load_experiment}')
             # the user has to make sure that the weights are compatible
-            init_cp = get_last_checkpoint(conf.train.load_experiment)
+            # init_cp = get_last_checkpoint(conf.train.load_experiment)
+            init_cp = os.path.join('/ws/external/outputs/training', conf.train.load_experiment, 'checkpoint_best.tar')
             init_cp = torch.load(str(init_cp), map_location='cpu')
         else:
             init_cp = None
@@ -542,10 +543,16 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
     stop = False
     signal.signal(signal.SIGINT, sigint_handler)
 
+    # model = get_model(conf.model.name)(conf.model).to(device)
+    # loss_fn, metrics_fn = model.loss, model.metrics
+    # if init_cp is not None:
+    #     model.load_state_dict(init_cp['model'])
     model = get_model(conf.model.name)(conf.model).to(device)
     loss_fn, metrics_fn = model.loss, model.metrics
     if init_cp is not None:
         model.load_state_dict(init_cp['model'])
+    model.extractor.add_extra_input()
+
 
     if args.distributed:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -734,7 +741,12 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
                 'losses': losses_,
                 'eval': results,
             }
-            cp_name = f'checkpoint_{epoch}' + ('_interrupted' if stop else '')
+            # cp_name = f'checkpoint_{epoch}' + ('_interrupted' if stop else '')
+            if args.save_every_epoch:
+                cp_name = f'checkpoint_{epoch}' + ('_interrupted' if stop else '')
+            else:
+                cp_name = f'checkpoint_last' + ('_interrupted' if stop else '')
+
             logger.info(f'Saving checkpoint {cp_name}')
             cp_path = str(output_dir / (cp_name + '.tar'))
             torch.save(checkpoint, cp_path)

@@ -417,5 +417,41 @@ class Camera(TensorWrapper):
             p3d = torch.cat([p3d_xy, torch.ones_like(p3d_xy[...,:1])], dim=-1)
         return p3d
 
+    @autocast
+    def world2image2(self, p3d: torch.Tensor) -> Tuple[torch.Tensor]:
+        '''Transform 3D points into 2D pixel coordinates.'''
+        p2d, visible = self.project2(p3d)
+        p2d, mask = self.undistort(p2d)
+        p2d = self.denormalize(p2d)
+        valid = visible & mask & self.in_image(p2d)
+        return p2d, valid
+
+    @autocast
+    def project2(self, p3d: torch.Tensor) -> Tuple[torch.Tensor]:
+        '''Project 3D points into the camera plane and check for visibility.'''
+        z = p3d[..., -1]
+        valid = z > self.eps
+        z = z.clamp(min=self.eps)
+
+        p2d = p3d[..., :-1] / z.unsqueeze(-1)
+        return p2d, valid
+
+    def J_world2image2(self, p3d: torch.Tensor):
+        p2d_dist, valid = self.project2(p3d)
+        J = (self.J_denormalize()
+             @ self.J_undistort(p2d_dist)
+             @ self.J_project2(p3d))
+        return J, valid
+
+    def J_project2(self, p3d: torch.Tensor):
+        x, y, z = p3d[..., 0], p3d[..., 1], p3d[..., 2]
+        zero = torch.zeros_like(z)
+        z = z.clamp(min=self.eps)
+        J = torch.stack([
+            1 / z, zero, -x / z ** 2,
+            zero, 1 / z, -y / z ** 2], dim=-1)
+        J = J.reshape(p3d.shape[:-1] + (2, 3))
+        return J  # N x 2 x 3
+
     def __repr__(self):
         return f'Camera {self.shape} {self.dtype} {self.device}'
