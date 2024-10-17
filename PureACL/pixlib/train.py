@@ -708,8 +708,8 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
             del pred, data, loss, losses
 
             results = 0
-            # if (stop or it == (len(train_loader) - 1)):
-            if it == 5 and model.conf.debug:
+            if (stop or it == (len(train_loader) - 1)):
+            # if it == 5 and model.conf.debug:
             #if (stop or ((it % conf.train.eval_every_iter == 0) and it!=0)):
             # if (((it % conf.train.eval_every_iter == 0) and it!=0) or stop
             #       or it == (len(train_loader)-1)):
