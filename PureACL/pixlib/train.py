@@ -599,6 +599,7 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
                     OmegaConf.to_yaml(conf))
     losses_ = None
 
+
     while epoch < conf.train.epochs and not stop:
         if rank == 0:
             logger.info(f'Starting epoch {epoch}')
@@ -761,10 +762,14 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
 
         epoch += 1
         if args.test_every_epoch:
-            test(rank, conf, output_dir, args, wandb_logger=wandb_logger)
+            # test(rank, conf, output_dir, args, wandb_logger=wandb_logger)
+            dataset = get_dataset(data_conf.name)(data_conf)  # load dataset
+            test_basic(dataset, model, wandb_logger, conf, args)  # test
 
     if not args.test_every_epoch:
-        test(rank, conf, output_dir, args, wandb_logger=wandb_logger)
+        # test(rank, conf, output_dir, args, wandb_logger=wandb_logger)
+        dataset = get_dataset(data_conf.name)(data_conf)            # load dataset
+        test_basic(dataset, model, wandb_logger, conf, args)        # test
 
     logger.info(f'Finished training on process {rank}.')
     if rank == 0:
