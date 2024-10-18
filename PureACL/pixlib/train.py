@@ -723,8 +723,8 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
                 if rank == 0:
                     str_results = [f'{k} {v:.3E}' for k, v in results.items()]
                     logger.info(f'[Validation] {{{", ".join(str_results)}}}')
-                    for k, v in results.items():
-                        writer.add_scalar('val/'+k, v, tot_it)
+                    # for k, v in results.items():
+                    #     writer.add_scalar('val/'+k, v, tot_it)
                 torch.cuda.empty_cache()  # should be cleared at the first iter
 
             if stop:
