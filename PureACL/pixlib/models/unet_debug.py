@@ -127,7 +127,7 @@ class UNet(BaseModel):
     def _init(self, conf):
         # Encoder
         self.encoder, skip_dims = self.build_encoder(conf)
-        self.add_extra_input()  # add for pose enbedding
+        # self.add_extra_input()  # add for pose enbedding
 
         # Decoder
         if conf.decoder is not None:
@@ -192,7 +192,7 @@ class UNet(BaseModel):
             if 1:
                 p3d_ongrd_q = data['q2r_gt'] * p3d_ongrd_q.reshape(-1, h * w, 3)
 
-                p2d_ref, ref_mask = data['ref']['camera'].world2image2(
+                p2d_ref, ref_mask = data['ref']['camera'].world2image(
                     data['ref']['T_w2cam'] * p3d_ongrd_q.reshape(-1, h * w, 3))
                 # p2d_ref = p2d_ref.reshape(-1, h*w, 2)
                 r2q_img, r2q_mask, _ = interpolate_tensor(data['ref']['image'], p2d_ref, 'linear',
@@ -213,7 +213,7 @@ class UNet(BaseModel):
             if 1:
                 # p3d_q = torch.einsum('bij,bhwj->...bhwi', data['q2r_gt'].inv().R, p3d_c)  # query world coordinate
                 p3d_q = data['q2r_gt'].inv() * p3d_c.reshape(-1, h * w, 3)
-                p2d_q, mask = data['query']['camera'].world2image2(
+                p2d_q, mask = data['query']['camera'].world2image(
                     data['query']['T_w2cam'] * p3d_q.reshape(-1, h * w, 3))
                 # p2d_q = p2d_q.reshape(-1, h*w, 2)
                 q2r_img, q2r_mask, _ = interpolate_tensor(data['query']['image'], p2d_q,
