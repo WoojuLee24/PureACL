@@ -139,7 +139,9 @@ class FordAV(BaseDataset):
     default_conf = {
         'dataset_dir': '/ws/data/Ford_AV', #"/home/shan/data/FordAV", #'/data/FordAV', #
         'mul_query': 2,
-        'pose_from': 'rt' # 'aa' or 'rt'
+        'pose_from': 'rt', # 'aa' or 'rt'
+        'rot_range': 15,
+        'trans_range': 5,
     }
 
     def _init(self, conf):
@@ -414,10 +416,10 @@ class _Dataset(Dataset):
 
         # init and gt pose~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # ramdom shift translation and rotation on yaw
-        YawShiftRange = 15 * np.pi / 180 #error degree
+        YawShiftRange = self.conf.rot_range * np.pi / 180 #15 * np.pi / 180 #error degree
         yaw = 2 * YawShiftRange * np.random.random() - YawShiftRange
         # R_yaw = torch.tensor([[np.cos(yaw),-np.sin(yaw),0],  [np.sin(yaw),np.cos(yaw),0], [0, 0, 1]])
-        TShiftRange = 5
+        TShiftRange =  self.conf.trans_range #5
         T = 2 * TShiftRange * np.random.rand((3)) - TShiftRange
         T[2] = 0  # no shift on height
         #print(f'in dataset: yaw:{yaw/np.pi*180},t:{T}')
