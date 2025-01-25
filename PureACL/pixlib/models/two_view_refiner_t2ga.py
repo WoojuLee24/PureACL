@@ -13,7 +13,8 @@ from PureACL.pixlib.models.base_model import BaseModel
 from PureACL.pixlib.models import get_model
 from PureACL.pixlib.models.utils import masked_mean, merge_confidence_map, extract_keypoints, camera_to_onground
 from PureACL.pixlib.geometry.losses import scaled_barron
-
+from torch import nn
+import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,33 @@ class TwoViewRefiner(BaseModel):
                              'use the `init_pose` config of the dataloader.')
         self.grd_height = conf.grd_height
 
+    def add_mlp(self):
+        self.mlp2 = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+        )
+        self.mlp1 = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 128),
+        )
+        self.mlp0 = nn.Sequential(
+            nn.Linear(32, 16),
+            nn.ReLU(),
+            nn.Linear(16, 16),
+            nn.ReLU(),
+            nn.Linear(16, 32),
+        )
+        self.mlp0 = self.mlp0.cuda()
+        self.mlp1 = self.mlp1.cuda()
+        self.mlp2 = self.mlp2.cuda()
+
+
     def _forward(self, data):
         def process_siamese(data_i, data_type):
             if data_type == 'ref':
@@ -116,12 +144,19 @@ class TwoViewRefiner(BaseModel):
             # turn grd key points from 2d to 3d, assume points are on ground
             p2d_c_key = data[q]['camera'].image2world(p2d_grd_key) # 2D->3D scale unknown
             p3d_grd_key = camera_to_onground(p2d_c_key, data[q]['T_w2cam'], data[q]['camera_h'], data['normal'])
+
+            p2d_grd_key_new = expand_y_coordinates(p2d_grd_key, 432)
+            # turn grd key points from 2d to 3d, assume points are on ground
+            p2d_c_key_new = data[q]['camera'].image2world(p2d_grd_key_new)  # 2D->3D scale unknown
+            p3d_grd_key_new = camera_to_onground(p2d_c_key_new, data[q]['T_w2cam'], data[q]['camera_h'], data['normal'])
+
             if q == 'query':
                 p3D_query = p3d_grd_key
+                p3D_query_new = p3d_grd_key_new
             else:
                 p3D_query = torch.cat([p3D_query, p3d_grd_key], dim=1)
+                p3D_query_new = torch.cat([p3D_query_new, p3d_grd_key_new], dim=1)
         pred['query']['grd_key_3d'] = p3D_query
-
 
         T_init = data['T_q2r_init']
 
@@ -145,16 +180,34 @@ class TwoViewRefiner(BaseModel):
             else:
                 querys = ['query']
 
+            if i == 2:
+                mlp = self.mlp2
+            elif i == 1:
+                mlp = self.mlp1
+            elif i == 0:
+                mlp = self.mlp0
+
             W_q = None
             F_q = None
             mask = None
             for q in querys:
                 F_q_cur = pred[q]['feature_maps'][i]
                 cam_q = pred[q]['camera_pyr'][i]
-
+t2ga
                 p2D_query, visible = cam_q.world2image(data[q]['T_w2cam'] * p3D_query)
                 F_q_cur, mask_cur, _ = opt.interpolator(F_q_cur, p2D_query)
                 mask_cur &= visible
+
+                p2D_query_new, visible_new = cam_q.world2image(data[q]['T_w2cam'] * p3D_query_new)
+                F_q_cur_value, mask_cur_new, _ = opt.interpolator(pred[q]['feature_maps'][i], p2D_query_new)
+                mask_cur_new &= visible_new
+
+
+                F_q_cur_key_new = mlp(F_q_cur_value)
+                mask = create_mask(p2D_query, p2D_query_new, 432)
+
+                F_q_cur, weights = scaled_dot_product_attention(F_q_cur, F_q_cur_key_new, F_q_cur_value, mask)
+
 
                 W_q_cur = pred[q]['confidences'][i]
                 W_q_cur, _, _ = opt.interpolator(W_q_cur, p2D_query)
@@ -179,6 +232,8 @@ class TwoViewRefiner(BaseModel):
                 else:
                     F_q = F_q_cur * mask_cur[:,:,None] + F_q * mask[:,:,None]
                     mask = torch.logical_or(mask, mask_cur)
+
+
 
             W_ref = pred['ref']['confidences'][i]
             W_ref_q = (W_ref, W_q, confidence_count)
@@ -352,4 +407,103 @@ class TwoViewRefiner(BaseModel):
         return metrics
 
 
+def expand_y_coordinates(coords, H):
+    """
+    Expands given [B, N, 2] coordinates by adding all y-coordinates from 0 to H for each unique x-coordinate.
 
+    Args:
+        coords (torch.Tensor): Input tensor of shape [B, N, 2] where last dimension represents (x, y).
+        H (int): Maximum y-coordinate (inclusive).
+
+    Returns:
+        torch.Tensor: Output tensor of shape [B, M, 2] with expanded coordinates.
+    """
+    B, N, _ = coords.shape
+
+    # Extract x and y coordinates
+    x_coords = coords[..., 0]  # Shape: [B, N]
+    unique_x_coords = [torch.unique(batch_x) for batch_x in x_coords]  # List of [B, num_unique_x]
+
+    # Generate all y-coordinates from 0 to H
+    y_coords = torch.arange(H + 1, device=coords.device)  # Shape: [H+1]
+
+    expanded_coords = []
+    for b in range(B):
+        unique_x = unique_x_coords[b]  # Shape: [num_unique_x]
+        # Repeat x for all y-coordinates and tile y
+        expanded_x = unique_x.repeat_interleave(len(y_coords))  # Shape: [num_unique_x * (H+1)]
+        expanded_y = y_coords.repeat(len(unique_x))  # Shape: [num_unique_x * (H+1)]
+
+        # Combine x and y into pairs
+        batch_expanded = torch.stack((expanded_x, expanded_y), dim=-1)  # Shape: [num_unique_x * (H+1), 2]
+        expanded_coords.append(batch_expanded)
+
+    # Pad all batches to the same size and stack
+    max_length = max(c.shape[0] for c in expanded_coords)
+    padded_coords = torch.stack([
+        torch.cat([c, c.new_zeros(max_length - c.shape[0], 2)]) for c in expanded_coords
+    ])  # Shape: [B, max_length, 2]
+
+    return padded_coords
+
+
+def scaled_dot_product_attention(Q, K, V, mask=None):
+    """
+    Compute the Scaled Dot-Product Attention.
+
+    Args:
+        Q (torch.Tensor): Query matrix of shape [B, N, D].
+        K (torch.Tensor): Key matrix of shape [B, M, D].
+        V (torch.Tensor): Value matrix of shape [B, M, D].
+        mask (torch.Tensor, optional): Mask tensor of shape [B, N, M] (optional).
+
+    Returns:
+        torch.Tensor: Attention output of shape [B, N, D].
+        torch.Tensor: Attention weights of shape [B, N, M].
+    """
+    # Step 1: Compute QK^T
+    d_k = Q.shape[-1]  # Dimension of Query/Key vectors
+    scores = torch.matmul(Q, K.transpose(-1, -2)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))  # [B, N, M]
+
+    # Step 2: Apply mask (if provided)
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, float('-inf'))  # Masked positions set to -inf
+
+    # Step 3: Softmax to get attention weights
+    attention_weights = F.softmax(scores, dim=-1)  # [B, N, M]
+
+    # Step 4: Weighted sum of Value matrix
+    output = torch.matmul(attention_weights, V)  # [B, N, D]
+
+    return output, attention_weights
+
+
+
+def create_mask(query, key, H):
+    """
+    Creates a mask tensor [B, N, M] based on query and key coordinates.
+
+    Args:
+        query (torch.Tensor): Query points of shape [B, N, 2] where last dimension is (x, y).
+        key (torch.Tensor): Key points of shape [B, M, 2] where last dimension is (x, y).
+        H (int): Maximum y-coordinate (for validation or constraints, if needed).
+
+    Returns:
+        torch.Tensor: Mask of shape [B, N, M], where mask[b, n, m] = 1 if:
+                      - query[b, n, 0] == key[b, m, 0] (same x-coordinate)
+                      - query[b, n, 1] >= key[b, m, 1] (y-coordinate of key <= y-coordinate of query)
+    """
+    # Extract x and y coordinates
+    query_x, query_y = query[..., 0], query[..., 1]  # Shape: [B, N]
+    key_x, key_y = key[..., 0], key[..., 1]          # Shape: [B, M]
+
+    # Compare x-coordinates (broadcasting for all queries and keys)
+    x_match = (query_x.unsqueeze(-1) == key_x.unsqueeze(-2))  # Shape: [B, N, M]
+
+    # Compare y-coordinates (query_y >= key_y)
+    y_match = (query_y.unsqueeze(-1) >= key_y.unsqueeze(-2))  # Shape: [B, N, M]
+
+    # Combine conditions to create the mask
+    mask = (x_match & y_match).long()  # Shape: [B, N, M], convert to integer type
+
+    return mask

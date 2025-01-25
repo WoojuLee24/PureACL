@@ -583,6 +583,8 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
     if init_cp is not None:
         model.load_state_dict(init_cp['model'])
     model.extractor.add_extra_input()
+    if conf.model.name == 'two_view_refiner_t2ga':
+        model.add_mlp()
 
 
     if args.distributed:
@@ -808,7 +810,7 @@ def training(rank, conf, output_dir, args, wandb_logger=None):
 
 def main_worker(rank, conf, output_dir, args):
     if args.wandb:
-        wandb_config = dict(project="cvl_rgb2", entity='kaist-url-ai28', name=args.experiment)
+        wandb_config = dict(project="cvl_fusion", entity='kaist-url-ai28', name=args.experiment)
         wandb_logger = WandbLogger(wandb_config, args)
         wandb_logger.before_run()
     else:
